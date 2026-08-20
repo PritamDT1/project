@@ -91,8 +91,13 @@ def activity(question,respond,adhar_no):
 def authenticate(adhar_card_no, email):
     ensure_connection()
     cursor.execute(
-        "SELECT adhar_card_no FROM user WHERE adhar_card_no = %s AND email = %s",
-        (adhar_card_no, email),
+                """
+                SELECT adhar_card_no
+                FROM user
+                WHERE adhar_card_no = %s
+                    AND (LOWER(TRIM(email)) = LOWER(TRIM(%s)) OR email IS NULL OR TRIM(email) = '')
+                """,
+                (int(adhar_card_no), email),
     )
     return cursor.fetchone() is not None
 

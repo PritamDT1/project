@@ -11,10 +11,13 @@ def render_login():
         adhar_card_no = st.number_input("Aadhaar card number", min_value=1, step=1, key="login_adhar")
         email = st.text_input("Email", key="login_email")
         if st.button("Log in", type="primary", key="login_submit"):
-            if d.authenticate(adhar_card_no, email.strip()):
-                st.session_state["current_user"] = int(adhar_card_no)
-                st.rerun()
-            st.error("Aadhaar card number and email do not match.")
+            try:
+                if d.authenticate(adhar_card_no, email.strip()):
+                    st.session_state["current_user"] = int(adhar_card_no)
+                    st.rerun()
+                st.error("Aadhaar card number and email do not match.")
+            except Exception as exc:
+                st.error(f"Login failed: {exc}")
 
     with register:
         with st.form("register_form"):
@@ -26,6 +29,9 @@ def render_login():
             submitted = st.form_submit_button("Create account", type="primary")
         if submitted:
             try:
+                if not email.strip():
+                    st.error("Email is required to create an account.")
+                    st.stop()
                 d.create_user(
                     adhar_card_no,
                     name.strip(),
