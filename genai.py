@@ -7,14 +7,17 @@ were — only the presentation layer has changed.
 Run with:
     streamlit run app.py
 """
-
+import mysql
+import pandas as pd
+import database as d
+import login as l
 import hashlib
 import html
 import os
 import tempfile
-
 import streamlit as st
 from dotenv import load_dotenv
+from streamlit.runtime.scriptrunner import get_script_run_ctx
 
 load_dotenv()
 
@@ -36,6 +39,12 @@ MODELS = [
 SUPPORTED_TYPES = ["pdf", "docx", "txt", "md", "pptx", "csv", "xlsx", "xls", "json"]
 
 st.set_page_config(page_title="Document Assistant", page_icon="📄", layout="wide")
+
+if get_script_run_ctx() is None:
+    raise RuntimeError(
+        "This is a Streamlit app. Start it with: "
+        ".\\.venv\\Scripts\\python.exe -m streamlit run genai.py"
+    )
 
 
 # --------------------------------------------------------------------------
@@ -773,9 +782,16 @@ def context_from_query(vector_store, query: str) -> str:
 
 inject_css()
 
+if "current_user" not in st.session_state:
+    l.render_login()
+    st.stop()
+
+current_user = st.session_state["current_user"]
+
 st.session_state.setdefault("total_docs_indexed", 0)
 st.session_state.setdefault("last_action", "—")
 st.session_state.setdefault("chat_history", [])
+st.session_state.setdefault("show_history", False)
 
 # ---- Sidebar — "control plate" ----
 st.sidebar.markdown('<div class="da-sidebar-title">Control Plate</div>', unsafe_allow_html=True)
@@ -806,8 +822,43 @@ st.sidebar.markdown(
 )
 render_chip_row([f".{t}" for t in SUPPORTED_TYPES])
 
+if st.sidebar.button(
+    "Hide history" if st.session_state.show_history else "History",
+    key="history_button",
+):
+    st.session_state.show_history = not st.session_state.show_history
+    st.rerun()
+
+history = d.get_history(current_user) if st.session_state.show_history else []
+if st.session_state.show_history:
+    if history:
+        st.sidebar.dataframe(
+            pd.DataFrame(history, columns=["Question", "Answer", "Time"]),
+            use_container_width=True,
+        )
+    else:
+        st.sidebar.info("No history yet.")
+
+if st.sidebar.button("Log out", key="logout_button"):
+    st.session_state.pop("current_user", None)
+    st.rerun()
+
 # ---- Hero ----
 render_hero(model_name)
+
+if st.session_state.show_history:
+    st.divider()
+    st.subheader("Conversation history")
+    if not history:
+        st.info("No saved conversations yet.")
+    else:
+        for question, response, timestamp in history:
+            with st.container(border=True):
+                st.caption(f"Time: {timestamp}")
+                st.markdown("**Question**")
+                st.write(question)
+                st.markdown("**Model response**")
+                st.write(response)
 
 # ---- Tabs ----
 tab_summarize, tab_compare, tab_ask = st.tabs(["Summarize", "Compare", "Ask Questions"])
@@ -843,6 +894,8 @@ with tab_summarize:
                     with st.spinner("Thinking..."):
                         ctx = context_from_query(vector_store, query)
                         response = model.invoke(f"Question: {query}\n\nContext:\n{ctx}")
+                        print("Question")
+                        d.activity(query, extract_text(response), current_user)
                 except Exception as exc:
                     st.error(f"The model call failed: {exc}")
                 else:
@@ -900,6 +953,7 @@ with tab_compare:
                             f"File 2 ({files2[1].name}) Context:\n{ctx2}\n\n"
                             f"Compare the two files based on the question above."
                         )
+                        d.activity(query2, extract_text(response), current_user)
                 except Exception as exc:
                     st.error(f"The model call failed: {exc}")
                 else:
@@ -978,6 +1032,8 @@ with tab_ask:
                         prompt = f"Question: {user_msg}\n\nAnswer clearly and concisely."
                     response = model.invoke(prompt)
                     answer = extract_text(response)
+                    
+                    d.activity(prompt, extract_text(response), current_user)
             except Exception as exc:
                 answer = f"The model call failed: {exc}"
             st.write(answer)
