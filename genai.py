@@ -15,11 +15,12 @@ import hashlib
 import html
 import os
 import tempfile
+from pathlib import Path
 import streamlit as st
 from dotenv import load_dotenv
 from streamlit.runtime.scriptrunner import get_script_run_ctx
 
-load_dotenv()
+load_dotenv(dotenv_path=Path(__file__).with_name(".env"), override=False)
 
 from langchain.chat_models import init_chat_model
 
@@ -705,7 +706,6 @@ def note(n: int) -> str:
 # --------------------------------------------------------------------------
 
 
-@st.cache_resource(show_spinner=False)
 def get_google_api_key() -> str:
     """Return the Gemini key, preferring the provider-specific variable."""
     return (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
