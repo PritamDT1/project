@@ -102,6 +102,11 @@ def health():
     return {"status": "ok", "service": "research-orbit-api"}
 
 
+@app.get("/")
+def root():
+    return {"status": "ok", "service": "research-orbit-api", "docs": "/docs"}
+
+
 @app.post("/auth/login")
 def login(payload: AuthPayload):
     try:
