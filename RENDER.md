@@ -29,3 +29,7 @@ uvicorn backend.api:app --reload --port 8000
 ```
 
 The model service keeps trained models in memory. Train a model again after an API restart or redeploy.
+
+For a manually created API service, leave the root directory empty, use
+`pip install -r backend/requirements.txt` as the build command, and use
+`uvicorn backend.api:app --host 0.0.0.0 --port $PORT` as the start command.
