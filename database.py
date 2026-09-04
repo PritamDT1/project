@@ -51,8 +51,8 @@ def createtable():
     CREATE TABLE IF NOT EXISTS history (
         history_id INT AUTO_INCREMENT PRIMARY KEY,
         adhar_card_no BIGINT,
-        question VARCHAR(255),
-        respond VARCHAR(255),
+        question TEXT,
+        respond LONGTEXT,
         time DATETIME,
         FOREIGN KEY (adhar_card_no) REFERENCES user(adhar_card_no)
     )

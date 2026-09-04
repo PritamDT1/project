@@ -13,7 +13,9 @@ import database as d
 import login as l
 import hashlib
 import html
+import importlib
 import os
+import sys
 import tempfile
 from pathlib import Path
 import streamlit as st
@@ -25,7 +27,7 @@ load_dotenv(dotenv_path=Path(__file__).with_name(".env"), override=False)
 from langchain.chat_models import init_chat_model
 
 from reader import read_file
-from chunk import chunk_text, create_vector_store, semantic_search
+from chunk import chunk_text, create_vector_store, create_vector_store_from_texts, semantic_search
 
 # --------------------------------------------------------------------------
 # Config
@@ -625,6 +627,57 @@ def inject_css() -> None:
                 gap: 1rem 1.5rem;
             }
         }
+
+        /* ---- professional dark surface ---- */
+        :root {
+            --da-ink: #E8EEF5;
+            --da-ink-soft: #9BA9B8;
+            --da-ink-faint: #687584;
+            --da-paper: #020407;
+            --da-card: rgba(9, 13, 18, 0.96);
+            --da-card-solid: #0A0F15;
+            --da-line: rgba(133, 157, 181, 0.2);
+            --da-accent: #5B8DEF;
+            --da-accent-bright: #86B4FF;
+            --da-accent-soft: rgba(91, 141, 239, 0.1);
+            --da-cyan: #65D9D2;
+            --da-pink: #E38ABF;
+            --da-glow: 0 0 18px rgba(91, 141, 239, 0.1);
+        }
+
+        [data-testid="stAppViewContainer"] {
+            background: linear-gradient(145deg, #020407 0%, #080C11 52%, #020407 100%) !important;
+        }
+
+        [data-testid="stAppViewContainer"]::before {
+            opacity: 0.16;
+            background-image: radial-gradient(circle, rgba(210, 225, 240, 0.65) 0 1px, transparent 1.3px);
+        }
+
+        [data-testid="stSidebar"] {
+            background: #05080C !important;
+            border-right-color: rgba(133, 157, 181, 0.16);
+        }
+
+        .da-hero {
+            background: linear-gradient(135deg, rgba(12, 18, 26, 0.98), rgba(6, 10, 15, 0.98));
+            border-color: rgba(133, 157, 181, 0.22);
+            border-top-color: var(--da-cyan);
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255,255,255,0.04);
+        }
+
+        [data-testid="stTextInput"] input,
+        [data-testid="stSelectbox"] div[data-baseweb="select"] > div,
+        [data-testid="stFileUploaderDropzone"],
+        [data-testid="stChatInput"] {
+            background: #080D12 !important;
+            border-color: rgba(133, 157, 181, 0.22) !important;
+        }
+
+        [data-testid="stBaseButton-primary"] {
+            background: #3F6FC7 !important;
+            border-color: #5B8DEF !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -767,7 +820,7 @@ def build_vector_store(uploaded_files):
             all_chunks.extend(chunk_text(text))
     if unsupported:
         return None, unsupported
-    vector_store = create_vector_store(all_chunks)
+    vector_store = create_vector_store_from_texts(all_chunks)
     return vector_store, []
 
 
@@ -792,9 +845,37 @@ st.session_state.setdefault("total_docs_indexed", 0)
 st.session_state.setdefault("last_action", "—")
 st.session_state.setdefault("chat_history", [])
 st.session_state.setdefault("show_history", False)
+st.session_state.setdefault("active_page", "assistant")
 
 # ---- Sidebar — "control plate" ----
 st.sidebar.markdown('<div class="da-sidebar-title">Control Plate</div>', unsafe_allow_html=True)
+
+if st.sidebar.button(
+    "Model Maker" if st.session_state.active_page == "assistant" else "Document Assistant",
+    key="model_maker_navigation",
+):
+    st.session_state.active_page = (
+        "modelmaker" if st.session_state.active_page == "assistant" else "assistant"
+    )
+    st.rerun()
+
+if st.session_state.active_page == "modelmaker":
+    if st.sidebar.button("Back to Document Assistant", key="back_to_assistant"):
+        st.session_state.active_page = "assistant"
+        st.rerun()
+    st.sidebar.markdown(
+        '<div class="da-field__label" style="margin-top:1.25rem;">Active workspace</div>',
+        unsafe_allow_html=True,
+    )
+    st.sidebar.markdown(
+        '<div class="da-field__value">Model Maker</div>',
+        unsafe_allow_html=True,
+    )
+    if "modelmaker" in sys.modules:
+        importlib.reload(sys.modules["modelmaker"])
+    else:
+        importlib.import_module("modelmaker")
+    st.stop()
 
 model_name = st.sidebar.selectbox(
     "Model",
@@ -943,8 +1024,8 @@ with tab_compare:
             else:
                 try:
                     with st.spinner("Comparing..."):
-                        vs1 = create_vector_store(chunk_text(text1))
-                        vs2 = create_vector_store(chunk_text(text2))
+                        vs1 = create_vector_store_from_texts(chunk_text(text1))
+                        vs2 = create_vector_store_from_texts(chunk_text(text2))
                         ctx1 = context_from_query(vs1, query2)
                         ctx2 = context_from_query(vs2, query2)
                         response = model.invoke(

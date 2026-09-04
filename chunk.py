@@ -18,8 +18,16 @@ def create_vector_store(file_paths):
         chunks = chunk_text(text)
         all_chunks.extend(chunks)
 
+    return create_vector_store_from_texts(all_chunks)
+
+
+def create_vector_store_from_texts(texts):
+    """Create a vector store from text chunks that have already been read."""
+    if not texts:
+        raise ValueError("No document text was available to index.")
+
     embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-2")
-    vector_store = FAISS.from_texts(all_chunks, embeddings)
+    vector_store = FAISS.from_texts(texts, embeddings)
     return vector_store
 
 # --- Semantic search ---
