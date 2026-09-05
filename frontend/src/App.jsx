@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { Bot, BrainCircuit, ChevronRight, CircleUserRound, FileText, FlaskConical, LoaderCircle, LogOut, Moon, Orbit, Send, ShieldCheck, Sparkles, UploadCloud } from 'lucide-react'
+import { Bot, BrainCircuit, ChevronRight, CircleUserRound, FileText, FlaskConical, History as HistoryIcon, LoaderCircle, LogOut, Moon, Orbit, Send, ShieldCheck, Sparkles, UploadCloud } from 'lucide-react'
 
 const configuredApiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 const API_URL = configuredApiUrl.startsWith('http') ? configuredApiUrl : `https://${configuredApiUrl}`
 const supportedTypes = ['PDF', 'DOCX', 'TXT', 'MD', 'PPTX', 'CSV', 'XLSX', 'JSON']
+const geminiModels = ['google_genai:gemini-3.6-flash', 'google_genai:gemini-3.5-flash', 'google_genai:gemini-3.5-flash-lite']
 
 function LoadingScreen() {
   return <div className="loading-screen"><div className="loading-orbit"><Orbit size={38} /><span /></div><p className="eyebrow">Research Orbit</p><h1>Initializing workspace</h1><div className="loading-bar"><i /></div></div>
@@ -33,7 +34,7 @@ function Field({ label, children }) { return <label className="field"><span>{lab
 
 function Shell({ user, onLogout }) {
   const [page, setPage] = useState('assistant')
-  return <div className="app-shell"><aside className="sidebar"><div className="brand"><span className="brand-icon"><Orbit size={20} /></span><span><b>Research Orbit</b><small>Private workspace</small></span></div><p className="nav-title">Workspace</p><nav><button className={page === 'assistant' ? 'nav-active' : ''} onClick={() => setPage('assistant')}><FileText size={17} />Document assistant</button><button className={page === 'maker' ? 'nav-active' : ''} onClick={() => setPage('maker')}><FlaskConical size={17} />Model maker</button></nav><div className="sidebar-bottom"><div className="user"><CircleUserRound size={18} /><span>{user?.name || user?.email || 'Signed in'}<small>Active session</small></span></div><button className="logout" onClick={onLogout}><LogOut size={15} />Log out</button></div></aside><main className="workspace"><header className="topbar"><span className="eyebrow">{page === 'maker' ? 'Model lab / supervised learning' : 'Research orbit / RAG discovery'}</span><span className="status"><i />System ready <Moon size={14} /></span></header>{page === 'assistant' ? <Assistant /> : <ModelMaker />}</main></div>
+  return <div className="app-shell"><aside className="sidebar"><div className="brand"><span className="brand-icon"><Orbit size={20} /></span><span><b>Research Orbit</b><small>Private workspace</small></span></div><p className="nav-title">Workspace</p><nav><button className={page === 'assistant' ? 'nav-active' : ''} onClick={() => setPage('assistant')}><FileText size={17} />Document assistant</button><button className={page === 'maker' ? 'nav-active' : ''} onClick={() => setPage('maker')}><FlaskConical size={17} />Models</button><button className={page === 'history' ? 'nav-active' : ''} onClick={() => setPage('history')}><HistoryIcon size={17} />History</button></nav><div className="sidebar-bottom"><div className="user"><CircleUserRound size={18} /><span>{user?.name || user?.email || 'Signed in'}<small>Active session</small></span></div><button className="logout" onClick={onLogout}><LogOut size={15} />Log out</button></div></aside><main className="workspace"><header className="topbar"><span className="eyebrow">{page === 'maker' ? 'Model lab / supervised learning' : page === 'history' ? 'Workspace / conversation history' : 'Research orbit / RAG discovery'}</span><span className="status"><i />System ready <Moon size={14} /></span></header>{page === 'assistant' ? <Assistant /> : page === 'maker' ? <ModelMaker /> : <History user={user} />}</main></div>
 }
 
 function Hero({ title, copy, icon: Icon }) { return <section className="hero"><div className="hero-icon"><Icon size={22} /></div><div><p className="eyebrow">Private workspace</p><h1>{title}</h1><p className="hero-copy">{copy}</p></div></section> }
@@ -42,11 +43,38 @@ function Assistant() {
   const [tab, setTab] = useState('summarize')
   const [files, setFiles] = useState([])
   const [query, setQuery] = useState('Summarize the key points of this document.')
+  const [modelName, setModelName] = useState(geminiModels[0])
   const [message, setMessage] = useState('')
-  const run = async () => { if (!files.length) return setMessage('Upload at least one file to begin.'); setMessage('Analyzing documents...'); const body = new FormData(); files.forEach(file => body.append('files', file)); body.append('query', query); body.append('mode', tab); try { const response = await fetch(`${API_URL}/documents/analyze`, { method: 'POST', body }); const data = await response.json(); if (!response.ok) throw new Error(data.detail || 'Analysis failed.'); setMessage(data.answer) } catch (error) { setMessage(error.message) } }
-  return <><Hero icon={Bot} title="Researcher" copy="Summarize, compare, and interrogate your files across a focused, private knowledge workspace." /><div className="tabs">{[['summarize', 'Summarize'], ['compare', 'Compare'], ['ask', 'Ask questions']].map(([key, label]) => <button className={tab === key ? 'active' : ''} onClick={() => setTab(key)} key={key}>{label}</button>)}</div><section className="content-grid"><div className="panel"><div className="panel-head"><div><h2>{tab === 'compare' ? 'Compare files' : tab === 'ask' ? 'Ask your documents' : 'Summarize files'}</h2><p>Upload sources and direct the research pass.</p></div><Sparkles size={19} /></div><label className="dropzone"><input type="file" multiple onChange={(event) => setFiles([...event.target.files])} /><UploadCloud size={26} /><strong>{files.length ? `${files.length} file(s) selected` : 'Drop files here or browse'}</strong><small>PDF, DOCX, TXT, CSV and more</small><span className="button">Choose files</span></label><div className="chips">{supportedTypes.map((type) => <span key={type}>{type}</span>)}</div><Field label={tab === 'ask' ? 'Question' : 'Research prompt'}><input value={query} onChange={(event) => setQuery(event.target.value)} /></Field><button className="primary" onClick={run}><Send size={15} />Run research pass</button>{message && <div className="notice">{message}</div>}</div><aside className="panel metrics"><Metric label="Documents indexed" value={files.length} /><Metric label="Retrieval mode" value="Gemini context" /><Metric label="Model state" value="Ready" /><div className="metric-note">Responses are grounded in your selected files.</div></aside></section></>
+  const run = async () => { if (tab !== 'ask' && !files.length) return setMessage('Upload at least one file to begin.'); if (!query.trim()) return setMessage('Enter a question or research prompt.'); setMessage('Analyzing documents...'); const body = new FormData(); files.forEach(file => body.append('files', file)); body.append('query', query); body.append('mode', tab); body.append('model_name', modelName); try { const response = await fetch(`${API_URL}/documents/analyze`, { method: 'POST', body }); const data = await response.json(); if (!response.ok) throw new Error(data.detail || 'Analysis failed.'); setMessage(data.answer) } catch (error) { setMessage(error.message) } }
+  return <><Hero icon={Bot} title="Researcher" copy="Summarize, compare, and interrogate your files across a focused, private knowledge workspace." /><div className="tabs">{[['summarize', 'Summarize'], ['compare', 'Compare'], ['ask', 'Ask questions']].map(([key, label]) => <button className={tab === key ? 'active' : ''} onClick={() => { setTab(key); setMessage('') }} key={key}>{label}</button>)}</div><section className="content-grid"><div className="panel"><div className="panel-head"><div><h2>{tab === 'compare' ? 'Compare files' : tab === 'ask' ? 'Ask anything' : 'Summarize files'}</h2><p>{tab === 'ask' ? 'Ask a general question or optionally add files for grounded answers.' : 'Upload sources and direct the research pass.'}</p></div><Sparkles size={19} /></div><label className="dropzone"><input type="file" multiple onChange={(event) => setFiles([...event.target.files])} /><UploadCloud size={26} /><strong>{files.length ? `${files.length} file(s) selected` : tab === 'ask' ? 'Optional files for context' : 'Drop files here or browse'}</strong><small>PDF, DOCX, TXT, CSV and more</small><span className="button">Choose files</span></label><div className="chips">{supportedTypes.map((type) => <span key={type}>{type}</span>)}</div><Field label="Gemini model"><select value={modelName} onChange={(event) => setModelName(event.target.value)}>{geminiModels.map((model) => <option value={model} key={model}>{model.replace('google_genai:', '')}</option>)}</select></Field><Field label={tab === 'ask' ? 'Question' : 'Research prompt'}><input value={query} onChange={(event) => setQuery(event.target.value)} /></Field><button className="primary" onClick={run}><Send size={15} />{tab === 'ask' ? 'Ask question' : 'Run research pass'}</button>{message && <div className="notice"><Answer content={message} /></div>}</div><aside className="panel metrics"><Metric label="Documents indexed" value={files.length} /><Metric label="Retrieval mode" value={files.length ? 'Gemini context' : 'General chat'} /><Metric label="Selected model" value={modelName.replace('google_genai:', '')} /><div className="metric-note">Files are optional for questions.</div></aside></section></>
 }
 function Metric({ label, value }) { return <div className="metric"><span>{label}</span><b>{value}</b></div> }
+
+function Answer({ content }) {
+  if (typeof content === 'string') return <div>{content}</div>
+  if (!Array.isArray(content)) return null
+  return <div>{content.map((block, index) => {
+    if (block.type === 'text') return <div key={index}>{block.text}</div>
+    const imageUrl = block.url || block.image_url?.url || (block.data && `data:${block.mime_type || 'image/png'};base64,${block.data}`)
+    return imageUrl ? <img key={index} src={imageUrl} alt="Model response" style={{ maxWidth: '100%', borderRadius: 8, marginTop: 12 }} /> : null
+  })}</div>
+}
+
+function History({ user }) {
+  const [entries, setEntries] = useState([])
+  const [status, setStatus] = useState('Loading history...')
+  useEffect(() => {
+    fetch(`${API_URL}/history/${encodeURIComponent(user.aadhaar)}`)
+      .then(async (response) => {
+        const data = await response.json()
+        if (!response.ok) throw new Error(data.detail || 'Could not load history.')
+        setEntries(data)
+        setStatus(data.length ? '' : 'No saved conversations yet.')
+      })
+      .catch((error) => setStatus(error.message))
+  }, [user.aadhaar])
+  return <><Hero icon={HistoryIcon} title="Conversation history" copy="Review your saved questions and responses from previous research sessions." /><section className="panel">{status && <div className="notice">{status}</div>}{entries.map((entry, index) => <article className="history-entry" key={`${entry.time}-${index}`}><div className="panel-head"><div><h2>{entry.question}</h2><p>{entry.time ? new Date(entry.time).toLocaleString() : 'Previous session'}</p></div></div><p>{entry.response}</p></article>)}</section></>
+}
 
 function LegacyModelMaker() {
   const [trained, setTrained] = useState(false)

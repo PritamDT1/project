@@ -1,6 +1,5 @@
 import mysql.connector
 import os
-import streamlit as st
 import pandas as pd
 import numpy as np
 from datetime import datetime
@@ -64,6 +63,8 @@ def createtable():
 
 
 def insert():
+    import streamlit as st
+
     ensure_connection()
     adhar_card_no = st.number_input("adhar_card_no")
     name  = st.text_input("name")
@@ -121,4 +122,3 @@ def get_history(adhar_card_no):
 
 
 createtable()
-

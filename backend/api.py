@@ -26,12 +26,17 @@ if not frontend_url.startswith("http"):
     frontend_url = f"https://{frontend_url}"
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[frontend_url, "http://localhost:5173"],
+    allow_origins=[frontend_url, "http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 models: dict[str, dict[str, Any]] = {}
+GEMINI_MODELS = [
+    "google_genai:gemini-3.6-flash",
+    "google_genai:gemini-3.5-flash",
+    "google_genai:gemini-3.5-flash-lite",
+]
 
 
 class AuthPayload(BaseModel):
@@ -56,17 +61,42 @@ def user_response(payload: AuthPayload) -> dict[str, str]:
     return {"aadhaar": payload.aadhaar, "email": payload.email, "name": payload.name or payload.email}
 
 
+def clean_model_content(content: Any) -> str | list[dict[str, Any]]:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        cleaned: list[dict[str, Any]] = []
+        for block in content:
+            if isinstance(block, str):
+                cleaned.append({"type": "text", "text": block})
+            elif isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str):
+                cleaned.append({"type": "text", "text": block["text"]})
+            elif isinstance(block, dict) and block.get("type") in {"image", "image_url"}:
+                image = {"type": block["type"]}
+                for key in ("image_url", "url", "data", "mime_type"):
+                    if key in block:
+                        image[key] = block[key]
+                cleaned.append(image)
+        if cleaned:
+            return cleaned
+    return str(content)
+
+
 @app.post("/documents/analyze")
 async def analyze_documents(
-    files: list[UploadFile] = File(...),
+    files: list[UploadFile] | None = File(None),
     query: str = Form(...),
     mode: str = Form("summarize"),
+    model_name: str = Form(GEMINI_MODELS[0]),
 ):
-    if not files or not query.strip():
-        raise HTTPException(status_code=400, detail="Files and a research prompt are required.")
+    files = files or []
+    if not query.strip():
+        raise HTTPException(status_code=400, detail="A research prompt is required.")
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if not api_key:
         raise HTTPException(status_code=503, detail="GEMINI_API_KEY is not configured.")
+    if model_name not in GEMINI_MODELS:
+        raise HTTPException(status_code=400, detail="Unsupported Gemini model.")
     try:
         from tempfile import TemporaryDirectory
         from reader import read_file
@@ -87,10 +117,15 @@ async def analyze_documents(
             "ask": query.strip(),
         }.get(mode, query.strip())
         os.environ["GOOGLE_API_KEY"] = api_key
-        model = init_chat_model("google_genai:gemini-2.0-flash", api_key=api_key)
-        response = model.invoke(f"Instruction: {instruction}\n\nDocument context:\n{context[:120000]}")
-        content = getattr(response, "content", response)
-        return {"answer": content if isinstance(content, str) else str(content), "files": [f.filename for f in files]}
+        model = init_chat_model(model_name, api_key=api_key)
+        prompt = f"Instruction: {instruction}"
+        if context:
+            prompt += f"\n\nDocument context:\n{context[:120000]}"
+        else:
+            prompt += "\n\nNo documents were provided. Answer as a general assistant."
+        response = model.invoke(prompt)
+        content = clean_model_content(getattr(response, "content", response))
+        return {"answer": content, "files": [f.filename for f in files]}
     except HTTPException:
         raise
     except Exception as exc:
@@ -105,6 +140,19 @@ def health():
 @app.get("/")
 def root():
     return {"status": "ok", "service": "research-orbit-api", "docs": "/docs"}
+
+
+@app.get("/history/{aadhaar}")
+def history(aadhaar: str):
+    try:
+        return [
+            {"question": question, "response": response, "time": time.isoformat() if time else None}
+            for question, response, time in database().get_history(int(aadhaar))
+        ]
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Aadhaar card number must be numeric.")
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"History service unavailable: {exc}")
 
 
 @app.post("/auth/login")
