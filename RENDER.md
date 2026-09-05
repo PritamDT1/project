@@ -22,6 +22,10 @@ npm install
 npm run dev
 ```
 
+The Render blueprint runs the frontend service from the `frontend` directory
+with `npm ci && npm run build` and publishes `dist`. If the static service was
+created manually, set **Root Directory** to `frontend`.
+
 The API can be run locally with:
 
 ```bash
