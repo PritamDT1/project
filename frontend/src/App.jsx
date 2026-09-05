@@ -120,12 +120,16 @@ function ModelMaker() {
   const updateValue = (key) => (event) => setValues({ ...values, [key]: event.target.value })
   const train = async () => {
     if (!dataset) return setStatus('Upload a CSV dataset before training.')
-    if (!target) return setStatus('Select the target variable from your CSV.')
-    if (!selectedFeatures.length) return setStatus('Select at least one feature column.')
+    const requestedTarget = target.trim() || columns[columns.length - 1] || ''
+    if (!requestedTarget) return setStatus('Upload a CSV with a header row first.')
+    const requestedFeatures = selectedFeatures.length ? selectedFeatures : columns.filter((column) => column !== requestedTarget)
+    if (!requestedFeatures.length) return setStatus('Your CSV must contain a target and at least one feature column.')
+    setTarget(requestedTarget)
+    setSelectedFeatures(requestedFeatures)
     setStatus('Training model...')
     const body = new FormData()
-    body.append('file', dataset); body.append('target', target); body.append('method', method)
-    body.append('features', JSON.stringify(selectedFeatures))
+    body.append('file', dataset); body.append('target', requestedTarget); body.append('method', method)
+    body.append('features', JSON.stringify(requestedFeatures))
     try {
       const response = await fetch(`${API_URL}/models/train`, { method: 'POST', body })
       const data = await response.json()
