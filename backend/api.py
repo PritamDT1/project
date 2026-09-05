@@ -1,12 +1,17 @@
 import os
 import secrets
 import sys
+import json
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
+import joblib
 import pandas as pd
+from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
@@ -18,6 +23,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, r2_score
 
 ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(ROOT / ".env")
 sys.path.insert(0, str(ROOT))
 
 app = FastAPI(title="Research Orbit API", version="1.0.0")
@@ -88,6 +94,7 @@ async def analyze_documents(
     query: str = Form(...),
     mode: str = Form("summarize"),
     model_name: str = Form(GEMINI_MODELS[0]),
+    aadhaar: str | None = Form(None),
 ):
     files = files or []
     if not query.strip():
@@ -125,6 +132,13 @@ async def analyze_documents(
             prompt += "\n\nNo documents were provided. Answer as a general assistant."
         response = model.invoke(prompt)
         content = clean_model_content(getattr(response, "content", response))
+        if aadhaar:
+            try:
+                database().activity(query.strip(), content if isinstance(content, str) else str(content), int(aadhaar))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="Aadhaar card number must be numeric.") from exc
+            except Exception as exc:
+                raise HTTPException(status_code=503, detail=f"Could not save conversation history: {exc}") from exc
         return {"answer": content, "files": [f.filename for f in files]}
     except HTTPException:
         raise
@@ -183,19 +197,48 @@ def register(payload: AuthPayload):
 
 
 @app.post("/models/train")
-async def train_model(file: UploadFile = File(...), target: str = "", method: str = "Random Forest Classifier"):
+async def train_model(
+    file: UploadFile = File(...),
+    target: str = Form(...),
+    method: str = Form("Random Forest Classifier"),
+    features: str = Form(""),
+):
+    target = target.strip()
+    method = method.strip()
     if not target:
         raise HTTPException(status_code=400, detail="Target variable is required.")
     try:
-        data = pd.read_csv(file.file)
+        data = pd.read_csv(file.file, encoding="utf-8-sig")
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Could not read CSV: {exc}")
+    data.columns = [str(column).strip() for column in data.columns]
+    if data.empty or not data.columns.tolist():
+        raise HTTPException(status_code=400, detail="The CSV does not contain any data.")
     if target not in data.columns:
-        raise HTTPException(status_code=400, detail="Target variable was not found in the CSV.")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Target variable '{target}' was not found in the CSV. "
+            f"Available columns: {', '.join(data.columns)}",
+        )
     data = data.dropna(subset=[target]).drop_duplicates()
     if len(data) < 4:
         raise HTTPException(status_code=400, detail="At least four valid rows are required.")
     y = data.pop(target)
+    if data.shape[1] == 0:
+        raise HTTPException(status_code=400, detail="The CSV must contain at least one feature column.")
+    if features:
+        try:
+            selected_features = json.loads(features)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail="Selected features are invalid.") from exc
+        if not isinstance(selected_features, list) or not all(isinstance(item, str) for item in selected_features):
+            raise HTTPException(status_code=400, detail="Selected features are invalid.")
+        selected_features = [item for item in selected_features if item in data.columns]
+        if not selected_features:
+            raise HTTPException(status_code=400, detail="Select at least one feature column.")
+        data = data[selected_features]
+    if y.nunique(dropna=True) < 2:
+        raise HTTPException(status_code=400, detail="The target variable must contain at least two distinct values.")
     is_classification = not pd.api.types.is_numeric_dtype(y) or y.nunique() <= 2
     if is_classification:
         estimator = LogisticRegression(max_iter=1000) if method == "Logistic Regression" else RandomForestClassifier(n_estimators=150, random_state=42)
@@ -203,17 +246,68 @@ async def train_model(file: UploadFile = File(...), target: str = "", method: st
         estimator = LinearRegression() if method == "Linear Regression" else RandomForestRegressor(n_estimators=150, random_state=42)
     numeric = data.select_dtypes(include="number").columns.tolist()
     categorical = data.select_dtypes(exclude="number").columns.tolist()
+    defaults: dict[str, Any] = {}
+    for column in numeric:
+        defaults[column] = float(data[column].mean())
+    for column in categorical:
+        values = data[column].dropna()
+        if not values.empty:
+            defaults[column] = str(values.mode().iloc[0])
     preprocess = ColumnTransformer([
         ("numeric", Pipeline([("imputer", SimpleImputer(strategy="median")), ("scale", StandardScaler())]), numeric),
         ("categorical", Pipeline([("imputer", SimpleImputer(strategy="most_frequent")), ("onehot", OneHotEncoder(handle_unknown="ignore"))]), categorical),
     ])
     pipeline = Pipeline([("preprocess", preprocess), ("model", estimator)])
-    x_train, x_test, y_train, y_test = train_test_split(data, y, test_size=0.2, random_state=42)
-    pipeline.fit(x_train, y_train)
-    score = accuracy_score(y_test, pipeline.predict(x_test)) if is_classification else r2_score(y_test, pipeline.predict(x_test))
+    try:
+        split_kwargs = {"test_size": 0.2, "random_state": 42}
+        if is_classification and y.value_counts().min() >= 2:
+            # Keep at least one example of every class in the validation set.
+            split_kwargs["test_size"] = max(0.2, y.nunique() / len(y))
+            split_kwargs["stratify"] = y
+        x_train, x_test, y_train, y_test = train_test_split(data, y, **split_kwargs)
+        pipeline.fit(x_train, y_train)
+        score = (
+            accuracy_score(y_test, pipeline.predict(x_test))
+            if is_classification
+            else r2_score(y_test, pipeline.predict(x_test))
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not train model: {exc}") from exc
     model_id = secrets.token_urlsafe(12)
-    models[model_id] = {"pipeline": pipeline, "classification": is_classification, "classes": y.drop_duplicates().tolist()}
-    return {"model_id": model_id, "classification": is_classification, "score": float(score), "features": data.columns.tolist(), "classes": models[model_id]["classes"] if is_classification else []}
+    models[model_id] = {
+        "pipeline": pipeline,
+        "classification": is_classification,
+        "classes": y.drop_duplicates().tolist() if is_classification else [],
+        "features": data.columns.tolist(),
+        "defaults": defaults,
+    }
+    return {
+        "model_id": model_id,
+        "classification": is_classification,
+        "score": float(score),
+        "features": data.columns.tolist(),
+        "feature_types": {
+            "numeric": numeric,
+            "categorical": categorical,
+        },
+        "defaults": defaults,
+        "classes": models[model_id]["classes"],
+    }
+
+
+@app.get("/models/{model_id}/download")
+def download_model(model_id: str):
+    entry = models.get(model_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Model not found. Train it again.")
+    model_file = BytesIO()
+    joblib.dump(entry, model_file)
+    model_file.seek(0)
+    return StreamingResponse(
+        model_file,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="model-{model_id}.joblib"'},
+    )
 
 
 @app.post("/models/predict")
@@ -223,6 +317,11 @@ def predict(payload: PredictPayload):
         raise HTTPException(status_code=404, detail="Model not found. Train it again.")
     try:
         result = entry["pipeline"].predict(pd.DataFrame([payload.values]))[0]
-        return {"prediction": result.item() if hasattr(result, "item") else result, "classification": entry["classification"]}
+        prediction = result.item() if hasattr(result, "item") else result
+        return {
+            "prediction": prediction,
+            "classification": entry["classification"],
+            "classes": entry["classes"],
+        }
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Prediction failed: {exc}")
